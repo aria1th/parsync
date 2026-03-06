@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use ssh2::{File, FileStat, Session, Sftp};
+use ssh2::{CheckResult, File, FileStat, KnownHostFileKind, Session, Sftp};
 
 use crate::delta::protocol::{BlockSigWire, DeltaPlan, HelperRequest, HelperResponse};
 
@@ -638,6 +638,7 @@ impl Connection {
         // Bound blocking SSH/SFTP operations so Ctrl+C can be observed in outer loops.
         session.set_timeout(5_000);
         session.handshake().context("ssh handshake failed")?;
+        verify_host_key(&session, target)?;
 
         authenticate_session(&session, target)?;
         let sftp = session.sftp().context("create sftp session")?;
@@ -816,6 +817,49 @@ impl Connection {
 
         Ok(out)
     }
+}
+
+fn verify_host_key(session: &Session, target: &ConnectTarget) -> Result<()> {
+    let mut known_hosts = session
+        .known_hosts()
+        .context("initialize ssh known_hosts")?;
+
+    for file in known_host_files() {
+        if !file.exists() {
+            continue;
+        }
+        known_hosts
+            .read_file(&file, KnownHostFileKind::OpenSSH)
+            .with_context(|| format!("read known_hosts file: {}", file.display()))?;
+    }
+
+    let (host_key, _) = session
+        .host_key()
+        .ok_or_else(|| anyhow!("server did not present an SSH host key"))?;
+
+    match known_hosts.check_port(&target.host, target.port, host_key) {
+        CheckResult::Match => Ok(()),
+        CheckResult::Mismatch => bail!("SSH host key mismatch for {}:{}", target.host, target.port),
+        CheckResult::NotFound => bail!(
+            "SSH host key for {}:{} not found in known_hosts",
+            target.host,
+            target.port
+        ),
+        CheckResult::Failure => bail!(
+            "SSH known_hosts verification failed for {}:{}",
+            target.host,
+            target.port
+        ),
+    }
+}
+
+fn known_host_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        files.push(PathBuf::from(home).join(".ssh/known_hosts"));
+    }
+    files.push(PathBuf::from("/etc/ssh/ssh_known_hosts"));
+    files
 }
 
 impl Drop for Connection {
