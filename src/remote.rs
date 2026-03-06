@@ -820,6 +820,14 @@ impl Connection {
 }
 
 fn verify_host_key(session: &Session, target: &ConnectTarget) -> Result<()> {
+    if std::env::var_os("PARSYNC_INSECURE_NO_HOST_KEY_CHECK").is_some() {
+        eprintln!(
+            "warning: skipping SSH host key verification for {}:{} (PARSYNC_INSECURE_NO_HOST_KEY_CHECK is set)",
+            target.host, target.port
+        );
+        return Ok(());
+    }
+
     let mut known_hosts = session
         .known_hosts()
         .context("initialize ssh known_hosts")?;
@@ -839,11 +847,19 @@ fn verify_host_key(session: &Session, target: &ConnectTarget) -> Result<()> {
 
     match known_hosts.check_port(&target.host, target.port, host_key) {
         CheckResult::Match => Ok(()),
-        CheckResult::Mismatch => bail!("SSH host key mismatch for {}:{}", target.host, target.port),
-        CheckResult::NotFound => bail!(
-            "SSH host key for {}:{} not found in known_hosts",
+        CheckResult::Mismatch => bail!(
+            "SSH host key MISMATCH for {}:{}. This may indicate a man-in-the-middle attack. \
+             Remove the stale entry from ~/.ssh/known_hosts and retry.",
             target.host,
             target.port
+        ),
+        CheckResult::NotFound => bail!(
+            "SSH host key for {}:{} not found in known_hosts. \
+             Connect with `ssh {}` first to accept the key, or set \
+             PARSYNC_INSECURE_NO_HOST_KEY_CHECK=1 to skip verification.",
+            target.host,
+            target.port,
+            target.host
         ),
         CheckResult::Failure => bail!(
             "SSH known_hosts verification failed for {}:{}",
