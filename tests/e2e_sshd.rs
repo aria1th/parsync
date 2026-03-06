@@ -56,6 +56,7 @@ fn run_parsync(remote: &str, destination: &Path) -> Result<()> {
     let output = Command::new(assert_cmd::cargo::cargo_bin!("parsync"))
         .args(["-vrPlu", remote, &destination.display().to_string()])
         .env("PARSYNC_SSH_PASSWORD", "pass")
+        .env("PARSYNC_INSECURE_NO_HOST_KEY_CHECK", "1")
         .output()
         .context("run parsync")?;
     if output.status.success() {
